@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>YA Trading - Live Candlestick Chart</title>
+
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background-color: #121212;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        header {
+            padding: 10px 15px;
+            background-color: #1e1e1e;
+            font-size: 15px;
+            font-weight: bold;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        /* वरती लेटेस्ट कँडलचा कॉन्स्टंट डेटा दाखवण्यासाठी स्टाईल */
+        .live-ohlc {
+            font-size: 13px;
+            font-weight: normal;
+            color: #d1d4dc;
+            display: flex;
+            gap: 8px;
+            background: #2a2e39;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }
+
+        .live-ohlc span b {
+            color: #26a69a;
+        }
+
+        .timeframe-buttons {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .tf-btn {
+            background-color: #2a2e39;
+            color: #d1d4dc;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .tf-btn:hover,
+        .tf-btn.active {
+            background-color: #2962ff;
+            color: #ffffff;
+        }
+
+        #chart-container {
+            flex: 1;
+            min-height: 0;
+            width: 100%;
+            position: relative;
+        }
+
+        /* कर्सर नेल्यावर कँडलच्या बाजूला दिसणारा टूलटिप बॉक्स */
+        .candle-tooltip {
+            position: absolute;
+            display: none;
+            padding: 6px 10px;
+            box-sizing: border-box;
+            font-size: 12px;
+            text-align: left;
+            z-index: 1000;
+            top: 12px;
+            left: 12px;
+            pointer-events: none;
+            border: 1px solid #2962ff;
+            border-radius: 4px;
+            background: rgba(30, 30, 30, 0.9);
+            color: #ffffff;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .candle-tooltip div {
+            margin: 2px 0;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <div class="header-left">
+        <span>NIFTY 50 - Live (IST)</span>
+        <!-- नेहमी लेटेस्ट कँडलचा कॉन्स्टंट डेटा इथे दिसेल -->
+        <div class="live-ohlc">
+            <span>O: <b id="live-o">0.00</b></span>
+            <span>H: <b id="live-h">0.00</b></span>
+            <span>L: <b id="live-l">0.00</b></span>
+            <span>C: <b id="live-c">0.00</b></span>
+        </div>
+    </div>
+
+    <div class="timeframe-buttons">
+        <button class="tf-btn active" onclick="changeTimeframe('1m', this)">1m</button>
+        <button class="tf-btn" onclick="changeTimeframe('3m', this)">3m</button>
+        <button class="tf-btn" onclick="changeTimeframe('5m', this)">5m</button>
+        <button class="tf-btn" onclick="changeTimeframe('15m', this)">15m</button>
+        <button class="tf-btn" onclick="changeTimeframe('30m', this)">30m</button>
+        <button class="tf-btn" onclick="changeTimeframe('1h', this)">1h</button>
+    </div>
+</header>
+
+<div id="chart-container">
+    <!-- फ्लोटिंग टूलटिप डिव्ह -->
+    <div id="tooltip" class="candle-tooltip"></div>
+</div>
+
+<script>
+    const chartContainer = document.getElementById('chart-container');
+    const tooltip = document.getElementById('tooltip');
+
+    // कॉन्स्टंट हेडर्सचे एलिमेंट्स
+    const liveO = document.getElementById('live-o');
+    const liveH = document.getElementById('live-h');
+    const liveL = document.getElementById('live-l');
+    const liveC = document.getElementById('live-c');
+
+    let currentInterval = '1m';
+    let fetchIntervalTimer = null; // लाईव्ह ऑटो-रिफ्रेश टाइमर
+
+    // भारतीय वेळेनुसार वेळ दाखवण्यासाठी
+    const istFormatter = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Kolkata',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
+
+    const chart = LightweightCharts.createChart(chartContainer, {
+        width: chartContainer.clientWidth,
+        height: chartContainer.clientHeight,
+
+        layout: {
+            background: {
+                color: '#121212'
+            },
+            textColor: '#d1d4dc'
+        },
+
+        grid: {
+            vertLines: {
+                color: '#282843'
+            },
+            horzLines: {
+                color: '#282843'
+            }
+        },
+
+        timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+            borderColor: '#282843',
+            tickMarkFormatter: (time) => {
+                let date;
+
+                if (typeof time === 'number') {
+                    date = new Date(time * 1000);
+                } else if (time && typeof time === 'object') {
+                    date = new Date(
+                        Date.UTC(time.year, time.month - 1, time.day)
+                    );
+                } else {
+                    return '';
+                }
+
+                return istFormatter.format(date);
+            }
+        },
+
+        localization: {
+            timeFormatter: (time) => {
+                let date;
+
+                if (typeof time === 'number') {
+                    date = new Date(time * 1000);
+                } else {
+                    date = new Date(
+                        Date.UTC(time.year, time.month - 1, time.day)
+                    );
+                }
+
+                return new Intl.DateTimeFormat('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    year: 'numeric',
+                    month: 'short',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                }).format(date);
+            }
+        },
+
+        rightPriceScale: {
+            borderColor: '#282843'
+        },
+
+        crosshair: {
+            vertLine: {
+                color: '#f0f0f0',
+                width: 1,
+                style: LightweightCharts.LineStyle.Dashed,
+                labelBackgroundColor: '#2962ff'
+            },
+            horzLine: {
+                color: '#f0f0f0',
+                width: 1,
+                style: LightweightCharts.LineStyle.Dashed,
+                labelBackgroundColor: '#2962ff'
+            }
+        }
+    });
+
+    const candlestickSeries = chart.addSeries(
+        LightweightCharts.CandlestickSeries,
+        {
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderVisible: false,
+            wickUpColor: '#26a69a',
+            wickDownColor: '#ef5350'
+        }
+    );
+
+    // माउस कर्सर नेल्यावर त्या विशिष्ट कँडलचा डेटा कँडलच्या शेजारी फ्लोटिंग बॉक्समध्ये दाखवणे
+    chart.subscribeCrosshairMove(param => {
+        if (
+            param.point === undefined ||
+            !param.time ||
+            param.point.x < 0 ||
+            param.point.x > chartContainer.clientWidth ||
+            param.point.y < 0 ||
+            param.point.y > chartContainer.clientHeight
+        ) {
+            tooltip.style.display = 'none';
+        } else {
+            const data = param.seriesData.get(candlestickSeries);
+            if (data) {
+                tooltip.style.display = 'block';
+                tooltip.innerHTML = `
+                    <div style="color: #2962ff; font-weight: bold;">Candle Details</div>
+                    <div>O: <span style="color: #fff">${data.open.toFixed(2)}</span></div>
+                    <div>H: <span style="color: #fff">${data.high.toFixed(2)}</span></div>
+                    <div>L: <span style="color: #fff">${data.low.toFixed(2)}</span></div>
+                    <div>C: <span style="color: #fff">${data.close.toFixed(2)}</span></div>
+                `;
+
+                let left = param.point.x + 15;
+                if (left > chartContainer.clientWidth - 120) {
+                    left = param.point.x - 120;
+                }
+                
+                let top = param.point.y + 15;
+                if (top > chartContainer.clientHeight - 100) {
+                    top = param.point.y - 100;
+                }
+
+                tooltip.style.left = left + 'px';
+                tooltip.style.top = top + 'px';
+            } else {
+                tooltip.style.display = 'none';
+            }
+        }
+    });
+
+    function loadChartData(interval) {
+        // कॅशिंग टाळण्यासाठी टाईमस्टॅम्प जोडणे
+        fetch(`/api/chart-data?interval=${interval}&_t=${new Date().getTime()}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Server error: ' + response.status);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.status === 'success') {
+                    const formattedData = data.candles.map(item => ({
+                        time: item.time,
+                        open: item.open,
+                        high: item.high,
+                        low: item.low,
+                        close: item.close
+                    }));
+
+                    candlestickSeries.setData(formattedData);
+
+                    // सर्वात शेवटच्या (लेटेस्ट) कँडलचा डेटा कॉन्स्टंट हेडरमध्ये सेट करणे
+                    if (formattedData.length > 0) {
+                        const latest = formattedData[formattedData.length - 1];
+                        liveO.innerText = latest.open.toFixed(2);
+                        liveH.innerText = latest.high.toFixed(2);
+                        liveL.innerText = latest.low.toFixed(2);
+                        liveC.innerText = latest.close.toFixed(2);
+                    }
+                } else {
+                    console.error('Error loading chart data:', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+            });
+    }
+
+    function changeTimeframe(interval, button) {
+        document.querySelectorAll('.tf-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+
+        button.classList.add('active');
+
+        currentInterval = interval;
+        loadChartData(currentInterval);
+
+        // टाइमफ्रेम बदलल्यावर टाइमर रीसेट करणे
+        startAutoRefresh();
+    }
+
+    // दर ५ सेकंदांनी नवीन कँडल डेटा मागवण्यासाठी ऑटो-रिफ्रेश टाइमर
+    function startAutoRefresh() {
+        if (fetchIntervalTimer) {
+            clearInterval(fetchIntervalTimer);
+        }
+        fetchIntervalTimer = setInterval(() => {
+            loadChartData(currentInterval);
+        }, 5000); // ५ सेकंद (५००० ms)
+    }
+
+    // सुरुवातीला १ मिनिटाचा चार्ट लोड करणे आणि टाइमर चालू करणे
+    loadChartData('1m');
+    startAutoRefresh();
+
+    // स्क्रीनचा आकार बदलल्यास चार्टचा आकार बदलणे
+    const resizeObserver = new ResizeObserver(() => {
+        chart.applyOptions({
+            width: chartContainer.clientWidth,
+            height: chartContainer.clientHeight
+        });
+    });
+
+    resizeObserver.observe(chartContainer);
+</script>
+
+</body>
+</html>
